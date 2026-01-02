@@ -16,9 +16,8 @@
   --surfaceActive:#221a3d;
   --text:#fff;
   --sub:#b3b3b3;
-  --accent:#7C4DFF;
+  --accent:#7C4DFF; /* PURPLE */
 }
-
 *{box-sizing:border-box}
 
 body{
@@ -59,6 +58,7 @@ select{
   gap:1px;
 }
 
+/* LIST ANIMATION */
 @keyframes listEnter{
   from{opacity:0;transform:translateY(14px)}
   to{opacity:1;transform:translateY(0)}
@@ -69,21 +69,38 @@ select{
   padding:12px;
   display:flex;
   gap:12px;
-  animation:listEnter .45s ease forwards;
+  align-items:flex-start;
+  animation:listEnter .45s cubic-bezier(.2,.8,.2,1) forwards;
   opacity:0;
 }
+
+.card:first-child{border-radius:20px 20px 0 0}
+.card:last-child{border-radius:0 0 20px 20px}
+.card:only-child{border-radius:20px}
 
 .card.playing{
   background:var(--surfaceActive);
   border-radius:50px !important;
 }
 
+/* IMAGE */
 .card img{
   width:48px;height:48px;
   border-radius:50%;
+  object-fit:cover;
 }
 
-/* PLAY */
+/* TEXT */
+.card-info{flex:1;min-width:0}
+.title,.meta{
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.title{font-size:14px;font-weight:600}
+.meta{font-size:12px;color:var(--sub);margin-top:4px}
+
+/* PLAY BUTTON */
 .play-wrap{
   width:42px;height:42px;
   border-radius:50%;
@@ -117,33 +134,32 @@ select{
 }
 
 .fab{bottom:24px;font-size:28px}
-.download-all{bottom:92px;display:none;position:fixed}
+.download-all{bottom:92px;display:none}
 
-/* DOWNLOAD PROGRESS */
-.progress-ring{
-  position:absolute;
-  inset:6px;
-  border-radius:50%;
-  border:3px solid rgba(0,0,0,.15);
-}
-.progress-fill{
-  position:absolute;
-  inset:6px;
-  border-radius:50%;
-  border:3px solid transparent;
-  border-top-color:#000;
-  transform:rotate(-90deg);
-  transition:.2s;
-}
-
-.progress-text{
-  position:absolute;
-  font-size:11px;
-  font-weight:600;
+.download-all .material-icons{
+  font-size:26px;
   color:#000;
 }
 
-.hidden{display:none}
+/* BOTTOM SHEET */
+.sheet{
+  position:fixed;
+  left:0;right:0;bottom:-100%;
+  background:var(--surface);
+  padding:20px;
+  border-radius:20px 20px 0 0;
+  transition:.35s;
+}
+.sheet.open{bottom:0}
+.sheet input,.sheet button{
+  width:100%;
+  padding:12px;
+  border-radius:8px;
+  border:none;
+  margin-bottom:12px;
+}
+.sheet input{background:var(--surface2);color:white}
+.sheet button{background:var(--accent);color:#000}
 </style>
 </head>
 
@@ -168,13 +184,15 @@ select{
 </div>
 
 <button class="download-all" id="downloadAll">
-  <span class="material-icons" id="downloadIcon">download</span>
-  <div class="progress-ring hidden"></div>
-  <div class="progress-fill hidden" id="progressFill"></div>
-  <div class="progress-text hidden" id="progressText">0%</div>
+  <span class="material-icons">download</span>
 </button>
 
 <button class="fab" id="fab">+</button>
+
+<div class="sheet" id="sheet">
+  <input id="playlistUrl" placeholder="Paste Spotify playlist URL">
+  <button id="loadBtn">Load</button>
+</div>
 
 <audio id="player"></audio>
 
@@ -182,84 +200,140 @@ select{
 const SPOTIFY_API = "https://spotify-api-6yog.vercel.app/api/scrape";
 const SAAVN_API = "https://jiosavan-api-with-playlist.vercel.app/api/search/songs";
 
-const downloadBtn = document.getElementById("downloadAll");
-const icon = document.getElementById("downloadIcon");
-const ring = downloadBtn.querySelector(".progress-ring");
-const fill = document.getElementById("progressFill");
-const text = document.getElementById("progressText");
+const tracksDiv = document.getElementById("tracks");
+const trackCount = document.getElementById("trackCount");
+const player = document.getElementById("player");
 const qualitySelect = document.getElementById("quality");
+const downloadBtn = document.getElementById("downloadAll");
 
-const saavnCache = {};
+let currentSongKey=null;
+let currentCard=null;
+const saavnCache={};
 
-/* ===== PROGRESS HELPERS ===== */
-function setProgress(p){
-  const deg = (p / 100) * 360;
-  fill.style.transform = `rotate(${deg - 90}deg)`;
-  text.textContent = `${Math.floor(p)}%`;
+fab.onclick = () => sheet.classList.add("open");
+
+function getPlaylistId(url){
+  try{return new URL(url).pathname.split("/playlist/")[1]}catch{return null}
 }
 
-function showProgress(){
-  icon.classList.add("hidden");
-  ring.classList.remove("hidden");
-  fill.classList.remove("hidden");
-  text.classList.remove("hidden");
+async function prefetchSaavn(key){
+  const res = await fetch(`${SAAVN_API}?query=${encodeURIComponent(key)}&limit=1`);
+  const json = await res.json();
+  saavnCache[key] = json?.data?.results?.[0]?.downloadUrl || [];
 }
 
-function hideProgress(){
-  icon.classList.remove("hidden");
-  ring.classList.add("hidden");
-  fill.classList.add("hidden");
-  text.classList.add("hidden");
-}
+loadBtn.onclick = async () => {
+  const id = getPlaylistId(playlistUrl.value.trim());
+  if(!id) return;
 
-/* ===== ADVANCED DOWNLOAD WITH REAL PROGRESS ===== */
+  sheet.classList.remove("open");
+  tracksDiv.innerHTML="";
+  downloadBtn.style.display="none";
+
+  const res = await fetch(`${SPOTIFY_API}?playlist=${id}`);
+  const data = await res.json();
+
+  const validTracks = data.tracks.filter(t =>
+    (t.title||"").trim() || (t.artists||"").trim()
+  );
+
+  trackCount.textContent = `${validTracks.length} tracks`;
+
+  await Promise.all(
+    validTracks.map(t => prefetchSaavn(`${t.title} ${t.artists}`))
+  );
+
+  downloadBtn.style.display="flex";
+
+  validTracks.forEach((t,i)=>{
+    const key = `${t.title} ${t.artists}`;
+
+    const card=document.createElement("div");
+    card.className="card";
+    card.style.animationDelay=`${i*45}ms`;
+
+    card.innerHTML=`
+      <img src="${t.image}">
+      <div class="card-info">
+        <div class="title">${t.title}</div>
+        <div class="meta">${t.artists}</div>
+      </div>
+      <div class="play-wrap">
+        <span class="material-icons">play_arrow</span>
+      </div>
+    `;
+
+    const playBtn=card.querySelector(".play-wrap");
+    const icon=playBtn.querySelector(".material-icons");
+
+    playBtn.onclick=()=>{
+      if(currentSongKey===key){
+        if(player.paused){
+          player.play();
+          icon.textContent="pause";
+          playBtn.classList.add("playing");
+          card.classList.add("playing");
+        }else{
+          player.pause();
+          icon.textContent="play_arrow";
+          playBtn.classList.remove("playing");
+          card.classList.remove("playing");
+        }
+        return;
+      }
+
+      if(currentCard){
+        currentCard.classList.remove("playing");
+        currentCard.querySelector(".play-wrap").classList.remove("playing");
+        currentCard.querySelector(".material-icons").textContent="play_arrow";
+      }
+
+      const urls=saavnCache[key];
+      const q=qualitySelect.value;
+      const url=urls.find(u=>u.quality===q)?.url || urls.at(-1)?.url;
+      if(!url) return;
+
+      player.src=url;
+      player.play();
+
+      icon.textContent="pause";
+      playBtn.classList.add("playing");
+      card.classList.add("playing");
+
+      currentSongKey=key;
+      currentCard=card;
+    };
+
+    tracksDiv.appendChild(card);
+  });
+};
+
+/* 🔥 ADVANCED FORCED DOWNLOAD (BLOB) */
 downloadBtn.onclick = async () => {
   const q = qualitySelect.value;
 
-  let totalBytes = 0;
-  let loadedBytes = 0;
-
-  showProgress();
-
-  /* Pre-calc total size */
-  for(const urls of Object.values(saavnCache)){
-    const u = urls.find(x => x.quality === q)?.url;
-    if(!u) continue;
-    const h = await fetch(u, { method:"HEAD" });
-    const len = h.headers.get("content-length");
-    if(len) totalBytes += +len;
-  }
-
-  for(const [song, urls] of Object.entries(saavnCache)){
-    const fileUrl = urls.find(x => x.quality === q)?.url;
+  for(const [song,urls] of Object.entries(saavnCache)){
+    const fileUrl = urls.find(u=>u.quality===q)?.url;
     if(!fileUrl) continue;
 
-    const res = await fetch(fileUrl);
-    const reader = res.body.getReader();
-    const chunks = [];
-    let done, value;
+    try{
+      const res = await fetch(fileUrl);
+      const blob = await res.blob();
 
-    while(({done,value} = await reader.read()) && !done){
-      chunks.push(value);
-      loadedBytes += value.length;
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = `${song}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
 
-      if(totalBytes){
-        setProgress((loadedBytes / totalBytes) * 100);
-      }
+      await new Promise(r=>setTimeout(r,400));
+    }catch(e){
+      console.error("Download failed:",song,e);
     }
-
-    const blob = new Blob(chunks);
-    const blobUrl = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = blobUrl;
-    a.download = `${song}.mp4`;
-    a.click();
-    URL.revokeObjectURL(blobUrl);
   }
-
-  setProgress(100);
-  setTimeout(hideProgress, 800);
 };
 </script>
 
