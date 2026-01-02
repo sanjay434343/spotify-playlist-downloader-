@@ -37,23 +37,51 @@ body{
 .header{
   display:flex;
   justify-content:space-between;
-  align-items:flex-end;
+  align-items:center;
+  gap:16px;
+  flex-wrap:wrap;
 }
 .header-title{font-size:26px;font-weight:700}
 .header-sub{font-size:13px;color:var(--sub)}
 
-select{
-  background:var(--surface2);
-  color:white;
-  border:none;
-  border-radius:8px;
-  padding:8px 10px;
-  transition:all .2s;
-  cursor:pointer;
+.quality-selector{
+  display:flex;
+  gap:8px;
+  background:var(--surface);
+  padding:6px;
+  border-radius:50px;
+  box-shadow:0 2px 8px rgba(0,0,0,.3);
 }
-select:hover{
-  background:var(--surfaceActive);
-  transform:translateY(-2px);
+
+.quality-btn{
+  background:transparent;
+  color:var(--sub);
+  border:none;
+  border-radius:50px;
+  padding:8px 16px;
+  cursor:pointer;
+  transition:all .3s cubic-bezier(.34,1.56,.64,1);
+  font-size:13px;
+  font-weight:600;
+  font-family:'Varela Round',system-ui;
+  position:relative;
+  overflow:hidden;
+}
+
+.quality-btn:hover{
+  background:var(--surface2);
+  color:var(--text);
+  transform:scale(1.05);
+}
+
+.quality-btn.active{
+  background:var(--accent);
+  color:#000;
+  box-shadow:0 2px 8px rgba(124,77,255,.4);
+}
+
+select{
+  display:none;
 }
 
 /* LIST */
@@ -100,7 +128,7 @@ select:hover{
   padding:12px;
   display:flex;
   gap:12px;
-  align-items:flex-start;
+  align-items:center;
   animation:listEnter .45s cubic-bezier(.2,.8,.2,1) forwards;
   opacity:0;
   transition:all .3s cubic-bezier(.2,.8,.2,1);
@@ -119,9 +147,12 @@ select:hover{
 .card:only-child{border-radius:20px}
 
 .card.playing{
-  background:var(--surfaceActive);
+  background:var(--surfaceActive) !important;
   border-radius:50px !important;
-  animation:pulse 2s ease-in-out infinite;
+  border:2px solid var(--accent);
+  opacity:1 !important;
+  visibility:visible !important;
+  display:flex !important;
 }
 
 .card.downloading{
@@ -139,6 +170,7 @@ select:hover{
   border-radius:50%;
   object-fit:cover;
   transition:all .3s;
+  flex-shrink:0;
 }
 .card:hover img{
   transform:rotate(5deg) scale(1.1);
@@ -170,6 +202,8 @@ select:hover{
   cursor:pointer;
   transition:all .3s cubic-bezier(.34,1.56,.64,1);
   position:relative;
+  overflow:hidden;
+  flex-shrink:0;
 }
 .play-wrap:hover{
   transform:scale(1.15);
@@ -214,6 +248,7 @@ select:hover{
   box-shadow:0 6px 16px rgba(0,0,0,.4);
   cursor:pointer;
   transition:all .3s cubic-bezier(.34,1.56,.64,1);
+  overflow:hidden;
 }
 
 .fab:hover,
@@ -358,13 +393,11 @@ select:hover{
       <div class="header-title">Playlist</div>
       <div class="header-sub" id="trackCount">No playlist loaded</div>
     </div>
-    <select id="quality">
-      <option value="12kbps">12 kbps</option>
-      <option value="48kbps">48 kbps</option>
-      <option value="96kbps">96 kbps</option>
-      <option value="160kbps" selected>160 kbps</option>
-      <option value="320kbps">320 kbps</option>
-    </select>
+    <div class="quality-selector">
+      <button class="quality-btn" data-quality="96kbps">96</button>
+      <button class="quality-btn active" data-quality="160kbps">160</button>
+      <button class="quality-btn" data-quality="320kbps">320</button>
+    </div>
   </div>
 
   <div class="list" id="tracks"></div>
@@ -400,7 +433,6 @@ const SAAVN_API = "https://jiosavan-api-with-playlist.vercel.app/api/search/song
 const tracksDiv = document.getElementById("tracks");
 const trackCount = document.getElementById("trackCount");
 const player = document.getElementById("player");
-const qualitySelect = document.getElementById("quality");
 const downloadBtn = document.getElementById("downloadAll");
 const progressModal = document.getElementById("progressModal");
 const progressBar = document.getElementById("progressBar");
@@ -409,7 +441,18 @@ const progressTitle = document.getElementById("progressTitle");
 
 let currentSongKey = null;
 let currentCard = null;
+let selectedQuality = "160kbps";
 const saavnCache = {};
+
+// Quality selector
+document.querySelectorAll('.quality-btn').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.quality-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    selectedQuality = btn.dataset.quality;
+    createRipple(btn);
+  };
+});
 
 fab.onclick = () => {
   sheet.classList.add("open");
@@ -423,13 +466,7 @@ function createRipple(element){
   ripple.style.top = "50%";
   ripple.style.transform = "translate(-50%,-50%)";
   
-  const parent = element.tagName === 'BUTTON' ? element : element.closest('.play-wrap') || element;
-  const existingPosition = parent.style.position;
-  if(!existingPosition || existingPosition === 'static'){
-    parent.style.position = "relative";
-  }
-  
-  parent.appendChild(ripple);
+  element.appendChild(ripple);
   setTimeout(() => ripple.remove(), 600);
 }
 
@@ -519,8 +556,7 @@ loadBtn.onclick = async () => {
       }
 
       const urls = saavnCache[key];
-      const q = qualitySelect.value;
-      const url = urls.find(u => u.quality === q)?.url || urls.at(-1)?.url;
+      const url = urls.find(u => u.quality === selectedQuality)?.url || urls.at(-1)?.url;
       if(!url) return;
 
       player.src = url;
@@ -541,7 +577,6 @@ loadBtn.onclick = async () => {
 downloadBtn.onclick = async () => {
   createRipple(downloadBtn);
   
-  const q = qualitySelect.value;
   const songs = Object.entries(saavnCache);
   const total = songs.length;
   let completed = 0;
@@ -552,7 +587,7 @@ downloadBtn.onclick = async () => {
   progressText.textContent = `0 / ${total}`;
 
   for(const [song, urls] of songs){
-    const fileUrl = urls.find(u => u.quality === q)?.url;
+    const fileUrl = urls.find(u => u.quality === selectedQuality)?.url;
     if(!fileUrl){
       completed++;
       continue;
