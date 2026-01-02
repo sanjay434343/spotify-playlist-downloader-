@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Playlist Downloader</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+<link href="https://fonts.googleapis.com/css2?family=Varela+Round&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+
+<style>
+:root{
+  --bg:#121212;
+  --surface:#1e1e1e;
+  --surface2:#242424;
+  --surfaceActive:#221a3d;
+  --text:#fff;
+  --sub:#b3b3b3;
+  --accent:#7C4DFF;
+}
+
+*{box-sizing:border-box}
+
+body{
+  margin:0;
+  font-family:'Varela Round',system-ui;
+  background:var(--bg);
+  color:var(--text);
+}
+
+.container{
+  max-width:900px;
+  margin:auto;
+  padding:20px 20px 180px;
+}
+
+/* HEADER */
+.header{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-end;
+}
+.header-title{font-size:26px;font-weight:700}
+.header-sub{font-size:13px;color:var(--sub)}
+
+select{
+  background:var(--surface2);
+  color:white;
+  border:none;
+  border-radius:8px;
+  padding:8px 10px;
+}
+
+/* LIST */
+.list{
+  margin-top:16px;
+  display:flex;
+  flex-direction:column;
+  gap:1px;
+}
+
+@keyframes listEnter{
+  from{opacity:0;transform:translateY(14px)}
+  to{opacity:1;transform:translateY(0)}
+}
+
+.card{
+  background:var(--surface);
+  padding:12px;
+  display:flex;
+  gap:12px;
+  animation:listEnter .45s ease forwards;
+  opacity:0;
+}
+
+.card.playing{
+  background:var(--surfaceActive);
+  border-radius:50px !important;
+}
+
+.card img{
+  width:48px;height:48px;
+  border-radius:50%;
+}
+
+/* PLAY */
+.play-wrap{
+  width:42px;height:42px;
+  border-radius:50%;
+  background:var(--surface2);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+}
+.play-wrap.playing{background:var(--accent)}
+.play-wrap .material-icons{
+  font-size:26px;
+  color:var(--accent);
+}
+.play-wrap.playing .material-icons{color:#000}
+
+/* FLOATING BUTTONS */
+.fab,
+.download-all{
+  position:fixed;
+  right:24px;
+  width:56px;height:56px;
+  border-radius:50%;
+  background:var(--accent);
+  border:none;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  box-shadow:0 6px 16px rgba(0,0,0,.4);
+  cursor:pointer;
+}
+
+.fab{bottom:24px;font-size:28px}
+.download-all{bottom:92px;display:none;position:fixed}
+
+/* DOWNLOAD PROGRESS */
+.progress-ring{
+  position:absolute;
+  inset:6px;
+  border-radius:50%;
+  border:3px solid rgba(0,0,0,.15);
+}
+.progress-fill{
+  position:absolute;
+  inset:6px;
+  border-radius:50%;
+  border:3px solid transparent;
+  border-top-color:#000;
+  transform:rotate(-90deg);
+  transition:.2s;
+}
+
+.progress-text{
+  position:absolute;
+  font-size:11px;
+  font-weight:600;
+  color:#000;
+}
+
+.hidden{display:none}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+  <div class="header">
+    <div>
+      <div class="header-title">Playlist</div>
+      <div class="header-sub" id="trackCount">No playlist loaded</div>
+    </div>
+    <select id="quality">
+      <option value="12kbps">12 kbps</option>
+      <option value="48kbps">48 kbps</option>
+      <option value="96kbps">96 kbps</option>
+      <option value="160kbps" selected>160 kbps</option>
+      <option value="320kbps">320 kbps</option>
+    </select>
+  </div>
+
+  <div class="list" id="tracks"></div>
+</div>
+
+<button class="download-all" id="downloadAll">
+  <span class="material-icons" id="downloadIcon">download</span>
+  <div class="progress-ring hidden"></div>
+  <div class="progress-fill hidden" id="progressFill"></div>
+  <div class="progress-text hidden" id="progressText">0%</div>
+</button>
+
+<button class="fab" id="fab">+</button>
+
+<audio id="player"></audio>
+
+<script>
+const SPOTIFY_API = "https://spotify-api-6yog.vercel.app/api/scrape";
+const SAAVN_API = "https://jiosavan-api-with-playlist.vercel.app/api/search/songs";
+
+const downloadBtn = document.getElementById("downloadAll");
+const icon = document.getElementById("downloadIcon");
+const ring = downloadBtn.querySelector(".progress-ring");
+const fill = document.getElementById("progressFill");
+const text = document.getElementById("progressText");
+const qualitySelect = document.getElementById("quality");
+
+const saavnCache = {};
+
+/* ===== PROGRESS HELPERS ===== */
+function setProgress(p){
+  const deg = (p / 100) * 360;
+  fill.style.transform = `rotate(${deg - 90}deg)`;
+  text.textContent = `${Math.floor(p)}%`;
+}
+
+function showProgress(){
+  icon.classList.add("hidden");
+  ring.classList.remove("hidden");
+  fill.classList.remove("hidden");
+  text.classList.remove("hidden");
+}
+
+function hideProgress(){
+  icon.classList.remove("hidden");
+  ring.classList.add("hidden");
+  fill.classList.add("hidden");
+  text.classList.add("hidden");
+}
+
+/* ===== ADVANCED DOWNLOAD WITH REAL PROGRESS ===== */
+downloadBtn.onclick = async () => {
+  const q = qualitySelect.value;
+
+  let totalBytes = 0;
+  let loadedBytes = 0;
+
+  showProgress();
+
+  /* Pre-calc total size */
+  for(const urls of Object.values(saavnCache)){
+    const u = urls.find(x => x.quality === q)?.url;
+    if(!u) continue;
+    const h = await fetch(u, { method:"HEAD" });
+    const len = h.headers.get("content-length");
+    if(len) totalBytes += +len;
+  }
+
+  for(const [song, urls] of Object.entries(saavnCache)){
+    const fileUrl = urls.find(x => x.quality === q)?.url;
+    if(!fileUrl) continue;
+
+    const res = await fetch(fileUrl);
+    const reader = res.body.getReader();
+    const chunks = [];
+    let done, value;
+
+    while(({done,value} = await reader.read()) && !done){
+      chunks.push(value);
+      loadedBytes += value.length;
+
+      if(totalBytes){
+        setProgress((loadedBytes / totalBytes) * 100);
+      }
+    }
+
+    const blob = new Blob(chunks);
+    const blobUrl = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = `${song}.mp4`;
+    a.click();
+    URL.revokeObjectURL(blobUrl);
+  }
+
+  setProgress(100);
+  setTimeout(hideProgress, 800);
+};
+</script>
+
+</body>
+</html>
