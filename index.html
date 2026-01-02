@@ -34,6 +34,7 @@ body{
   padding:20px 20px 180px;
 }
 
+/* HEADER */
 .header{
   display:flex;
   justify-content:space-between;
@@ -50,17 +51,16 @@ select{
   padding:8px 10px;
 }
 
-.list{margin-top:16px}
-
+/* FLOATING BUTTONS */
+.fab,
 .download-all{
   position:fixed;
   right:24px;
-  bottom:92px;
   width:56px;height:56px;
   border-radius:50%;
   background:var(--accent);
   border:none;
-  display:none;
+  display:flex;
   align-items:center;
   justify-content:center;
   box-shadow:0 6px 16px rgba(0,0,0,.4);
@@ -68,21 +68,61 @@ select{
   color:#000;
 }
 
+.fab{
+  bottom:24px;
+  font-size:28px;
+}
+
+.download-all{
+  bottom:92px;
+  display:none;
+}
+
+/* PROGRESS TEXT */
 .progress-text{
   font-size:12px;
   font-weight:700;
 }
 
-.fab{
+/* BOTTOM SHEET */
+.sheet{
   position:fixed;
-  right:24px;
-  bottom:24px;
-  width:56px;height:56px;
-  border-radius:50%;
-  background:var(--accent);
+  left:0;
+  right:0;
+  bottom:-100%;
+  background:var(--surface);
+  padding:20px;
+  border-radius:20px 20px 0 0;
+  transition:bottom .35s ease;
+}
+
+.sheet.open{
+  bottom:0;
+}
+
+.sheet h3{
+  margin:0 0 12px;
+  font-size:16px;
+}
+
+.sheet input{
+  width:100%;
+  padding:12px;
+  border-radius:8px;
   border:none;
-  font-size:28px;
-  cursor:pointer;
+  background:var(--surface2);
+  color:white;
+  margin-bottom:12px;
+}
+
+.sheet button{
+  width:100%;
+  padding:12px;
+  border-radius:8px;
+  border:none;
+  background:var(--accent);
+  color:#000;
+  font-weight:600;
 }
 </style>
 </head>
@@ -95,6 +135,7 @@ select{
       <div class="header-title">Playlist</div>
       <div class="header-sub" id="trackCount">No playlist loaded</div>
     </div>
+
     <select id="quality">
       <option value="96kbps">96 kbps</option>
       <option value="160kbps" selected>160 kbps</option>
@@ -103,11 +144,20 @@ select{
   </div>
 </div>
 
+<!-- DOWNLOAD BUTTON -->
 <button class="download-all" id="downloadAll">
   <span class="progress-text" id="progressText">0%</span>
 </button>
 
+<!-- ADD BUTTON -->
 <button class="fab" id="fab">+</button>
+
+<!-- BOTTOM SHEET -->
+<div class="sheet" id="sheet">
+  <h3>Load Spotify Playlist</h3>
+  <input id="playlistUrl" placeholder="Paste Spotify playlist URL">
+  <button id="loadBtn">Load</button>
+</div>
 
 <audio id="player"></audio>
 
@@ -115,75 +165,107 @@ select{
 const SPOTIFY_API = "https://spotify-api-6yog.vercel.app/api/scrape";
 const SAAVN_API = "https://jiosavan-api-with-playlist.vercel.app/api/search/songs";
 
+const fab = document.getElementById("fab");
+const sheet = document.getElementById("sheet");
+const loadBtn = document.getElementById("loadBtn");
+const playlistUrl = document.getElementById("playlistUrl");
 const downloadBtn = document.getElementById("downloadAll");
 const progressText = document.getElementById("progressText");
+const trackCount = document.getElementById("trackCount");
 const qualitySelect = document.getElementById("quality");
 
-const fileStore = new Map(); // filename -> Blob
 const saavnCache = {};
+const fileStore = new Map();
 
+/* FAB ACTION */
+fab.onclick = () => {
+  sheet.classList.add("open");
+};
+
+/* EXTRACT PLAYLIST ID */
 function getPlaylistId(url){
-  try{return new URL(url).pathname.split("/playlist/")[1]}catch{return null}
+  try{
+    return new URL(url).pathname.split("/playlist/")[1];
+  }catch{
+    return null;
+  }
 }
 
+/* FETCH SAAVN URLS */
 async function prefetchSaavn(key){
   const res = await fetch(`${SAAVN_API}?query=${encodeURIComponent(key)}&limit=1`);
   const json = await res.json();
   saavnCache[key] = json?.data?.results?.[0]?.downloadUrl || [];
 }
 
-/* ===============================
-   DOWNLOAD → MEMORY → SAVE
-================================ */
-downloadBtn.onclick = async () => {
-  const q = qualitySelect.value;
+/* LOAD PLAYLIST */
+loadBtn.onclick = async () => {
+  const id = getPlaylistId(playlistUrl.value.trim());
+  if(!id) return;
 
-  let totalBytes = 0;
-  let downloaded = 0;
+  sheet.classList.remove("open");
+  downloadBtn.style.display = "none";
+  trackCount.textContent = "Loading…";
+
+  const res = await fetch(`${SPOTIFY_API}?playlist=${id}`);
+  const data = await res.json();
+
+  const validTracks = data.tracks.filter(t =>
+    (t.title||"").trim() || (t.artists||"").trim()
+  );
+
+  trackCount.textContent = `${validTracks.length} tracks`;
+
+  await Promise.all(
+    validTracks.map(t => prefetchSaavn(`${t.title} ${t.artists}`))
+  );
 
   downloadBtn.style.display = "flex";
+};
+
+/* DOWNLOAD → MEMORY → SAVE */
+downloadBtn.onclick = async () => {
+  const q = qualitySelect.value;
+  let total = 0;
+  let loaded = 0;
+
   progressText.textContent = "0%";
 
-  // 1️⃣ Calculate total size
-  for (const urls of Object.values(saavnCache)) {
-    const u = urls.find(x => x.quality === q)?.url;
-    if (!u) continue;
-    const h = await fetch(u, { method: "HEAD" });
+  for(const urls of Object.values(saavnCache)){
+    const u = urls.find(x=>x.quality===q)?.url;
+    if(!u) continue;
+    const h = await fetch(u,{method:"HEAD"});
     const len = h.headers.get("content-length");
-    if (len) totalBytes += +len;
+    if(len) total += +len;
   }
 
-  // 2️⃣ Download all into memory
-  for (const [song, urls] of Object.entries(saavnCache)) {
-    const fileUrl = urls.find(x => x.quality === q)?.url;
-    if (!fileUrl) continue;
+  for(const [song,urls] of Object.entries(saavnCache)){
+    const u = urls.find(x=>x.quality===q)?.url;
+    if(!u) continue;
 
-    const res = await fetch(fileUrl);
+    const res = await fetch(u);
     const reader = res.body.getReader();
-    const chunks = [];
+    const chunks=[];
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    while(true){
+      const {done,value} = await reader.read();
+      if(done) break;
       chunks.push(value);
-      downloaded += value.length;
-      progressText.textContent = `${Math.floor((downloaded / totalBytes) * 100)}%`;
+      loaded += value.length;
+      progressText.textContent = `${Math.floor((loaded/total)*100)}%`;
     }
 
-    const blob = new Blob(chunks);
-    fileStore.set(`${song}.mp4`, blob);
+    fileStore.set(`${song}.mp4`, new Blob(chunks));
   }
 
   progressText.textContent = "Saving…";
 
-  // 3️⃣ Ask user ONCE where to save
-  const dirHandle = await window.showDirectoryPicker();
-
-  for (const [name, blob] of fileStore) {
-    const fileHandle = await dirHandle.getFileHandle(name, { create: true });
-    const writable = await fileHandle.createWritable();
-    await writable.write(blob);
-    await writable.close();
+  const dir = await window.showDirectoryPicker();
+  for(const [name,blob] of fileStore){
+    const fh = await dir.getFileHandle(name,{create:true});
+    const w = await fh.createWritable();
+    await w.write(blob);
+    await w.close();
   }
 
   progressText.textContent = "Done";
